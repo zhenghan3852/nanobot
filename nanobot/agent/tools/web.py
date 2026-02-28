@@ -44,10 +44,10 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 
 class WebSearchTool(Tool):
-    """Search the web using Brave Search API."""
+    """Search the web using Serper.dev (Google Search) API."""
     
     name = "web_search"
-    description = "Search the web. Returns titles, URLs, and snippets."
+    description = "Search the web using Google (via Serper). Returns titles, URLs, and snippets."
     parameters = {
         "type": "object",
         "properties": {
@@ -58,34 +58,54 @@ class WebSearchTool(Tool):
     }
     
     def __init__(self, api_key: str | None = None, max_results: int = 5):
-        self.api_key = api_key or os.environ.get("BRAVE_API_KEY", "")
+        # 优先读取 SERPER_API_KEY
+        self.api_key = api_key or os.environ.get("SERPER_API_KEY", "")
         self.max_results = max_results
     
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         if not self.api_key:
-            return "Error: BRAVE_API_KEY not configured"
+            return "Error: SERPER_API_KEY not configured"
         
         try:
             n = min(max(count or self.max_results, 1), 10)
+            
+            # Serper 推荐使用 POST 请求
+            url = "https://google.serper.dev/search"
+            payload = json.dumps({
+                "q": query,
+                "num": n,
+                "gl": "cn",  # 可选: 设置地理位置 (例如 'cn', 'us')
+                "hl": "zh-cn" # 可选: 设置语言 (例如 'zh-cn', 'en')
+            })
+            headers = {
+                'X-API-KEY': self.api_key,
+                'Content-Type': 'application/json'
+            }
+
             async with httpx.AsyncClient() as client:
-                r = await client.get(
-                    "https://api.search.brave.com/res/v1/web/search",
-                    params={"q": query, "count": n},
-                    headers={"Accept": "application/json", "X-Subscription-Token": self.api_key},
-                    timeout=10.0
-                )
+                # 注意：这里改成了 POST
+                r = await client.post(url, headers=headers, data=payload, timeout=10.0)
                 r.raise_for_status()
             
-            results = r.json().get("web", {}).get("results", [])
+            # Serper 的返回结构主要在 'organic' 字段中
+            data = r.json()
+            results = data.get("organic", [])
+            
             if not results:
                 return f"No results for: {query}"
             
             lines = [f"Results for: {query}\n"]
             for i, item in enumerate(results[:n], 1):
-                lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
-                if desc := item.get("description"):
-                    lines.append(f"   {desc}")
+                title = item.get('title', 'No Title')
+                link = item.get('link', 'No Link') # Serper 使用 'link' 而不是 'url'
+                snippet = item.get('snippet', '')  # Serper 使用 'snippet' 而不是 'description'
+                
+                lines.append(f"{i}. {title}\n   {link}")
+                if snippet:
+                    lines.append(f"   {snippet}")
+            
             return "\n".join(lines)
+
         except Exception as e:
             return f"Error: {e}"
 
